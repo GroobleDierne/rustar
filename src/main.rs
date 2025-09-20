@@ -1,59 +1,87 @@
+use std::{env, time::Duration};
+
 use rusb::{Context, Device, DeviceHandle, Result, UsbContext};
 
 const VID: u16 = 0x3554;
 const PID: u16 = 0xf509;
 
 fn main() -> Result<()> {
-    for device in rusb::devices().unwrap().iter() {
-        let device_desc = device.device_descriptor().unwrap();
-
-        if device_desc.vendor_id() != 0x3554 {
-            continue;
-        }
-
-        println!("Bus {:03} Device {:03} ID {:04x}:{:04x}",
-            device.bus_number(),
-            device.address(),
-            device_desc.vendor_id(),
-            device_desc.product_id());
-        println!("Conf possible {:03} Packet size {:03}", device_desc.num_configurations(), device_desc.max_packet_size());
-        let conf_desc = device.config_descriptor(0).unwrap();
-        println!("Max power {:} Number of interfaces {:}", conf_desc.max_power(), conf_desc.num_interfaces());
-
-        for interface in conf_desc.interfaces() {
-            for descriptor in interface.descriptors() {
-                println!("Class {:x} Endpoints {:x}", descriptor.class_code(), descriptor.num_endpoints());
-                for endpoint in descriptor.endpoint_descriptors() {
-                    let dir = match endpoint.direction() {
-                        rusb::Direction::In => "IN",
-                        rusb::Direction::Out => "OUT"
-                    };
-                    let usage = match endpoint.usage_type() {
-                        rusb::UsageType::Data => "Data",
-                        rusb::UsageType::Feedback => "Feedback",
-                        rusb::UsageType::FeedbackData => "FeedbackData",
-                        rusb::UsageType::Reserved => "Reserved",
-                    };
-                    let sync_type = match endpoint.sync_type() {
-                        rusb::SyncType::NoSync => "NoSync",
-                        rusb::SyncType::Asynchronous => "Async",
-                        rusb::SyncType::Adaptive => "Adaptative",
-                        rusb::SyncType::Synchronous => "Synchronous",
-                    };
-                    let transfer_type = match endpoint.transfer_type() {
-                        rusb::TransferType::Control => "Control",
-                        rusb::TransferType::Isochronous => "Isochronous",
-                        rusb::TransferType::Bulk => "Bulk",
-                        rusb::TransferType::Interrupt => "Interrupt",
-                    };
-                    println!("Add: {:b}, Dir: {:}, Usage: {:}, Type: {:}, Sync Type: {:}, Trans Type: {:}", endpoint.address(), dir, usage, endpoint.descriptor_type(), sync_type, transfer_type);
-                }
-            }
-        }
-    }
+    let args: Vec<String> = env::args().collect();
     let mut context = Context::new()?;
     let (mut device, mut handle) =
         open_device(&mut context, VID, PID).expect("Failed to open USB device");
+
+    println!(
+        "Bus {:03} Device {:03}",
+        device.bus_number(),
+        device.address()
+    );
+
+    if args.len() == 1 {
+        panic!("Please specify a profile number");
+    }
+
+    let profile: i8 = match args
+        .get(1)
+        .expect("Please specify a profile number")
+        .as_ref()
+    {
+        "0" => 0,
+        "1" => 1,
+        _ => -1,
+    };
+
+    if profile == -1 {
+        panic!("Invalid profile");
+    }
+
+    let endpoints = find_readable_endpoints(&mut device)?;
+    let mut conf_endpoint: Option<Endpoint> = None;
+
+    for endpoint in endpoints {
+        if conf_endpoint.is_none() {
+            conf_endpoint = Some(endpoint);
+        }
+
+        let has_kernel_driver = match handle.kernel_driver_active(endpoint.iface) {
+            Ok(true) => {
+                handle.detach_kernel_driver(endpoint.iface)?;
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                println!("{:?}", e);
+                false
+            }
+        };
+        println!("has kernel driver? {}", has_kernel_driver);
+    }
+
+    if let Some(endpoint) = conf_endpoint {
+        println!("Configuring...");
+        configure_endpoint(&mut handle, &endpoint)?;
+        handle.claim_interface(1)?;
+
+        match profile {
+            0 => {
+                switch_profile_0(&mut handle)?;
+            }
+            1 => {
+                switch_profile_1(&mut handle)?;
+            }
+            _ => (),
+        };
+
+        // cleanup after use
+        println!("Releasing interface...");
+        handle.release_interface(endpoint.iface)?;
+        handle.release_interface(1)?;
+        for edp in find_readable_endpoints(&mut device).unwrap() {
+            println!("Attaching kernel...");
+            handle.attach_kernel_driver(edp.iface)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -76,7 +104,10 @@ fn open_device<T: UsbContext>(
         if device_desc.vendor_id() == vid && device_desc.product_id() == pid {
             match device.open() {
                 Ok(handle) => return Some((device, handle)),
-                Err(_) => continue,
+                Err(e) => {
+                    println!("{}", e);
+                    continue;
+                }
             }
         }
     }
@@ -84,7 +115,7 @@ fn open_device<T: UsbContext>(
     None
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Endpoint {
     config: u8,
     iface: u8,
@@ -101,12 +132,10 @@ fn find_readable_endpoints<T: UsbContext>(device: &mut Device<T>) -> Result<Vec<
             Ok(c) => c,
             Err(_) => continue,
         };
-        // println!("{:#?}", config_desc);
+
         for interface in config_desc.interfaces() {
             for interface_desc in interface.descriptors() {
-                // println!("{:#?}", interface_desc);
                 for endpoint_desc in interface_desc.endpoint_descriptors() {
-                    // println!("{:#?}", endpoint_desc);
                     endpoints.push(Endpoint {
                         config: config_desc.number(),
                         iface: interface_desc.interface_number(),
@@ -119,4 +148,61 @@ fn find_readable_endpoints<T: UsbContext>(device: &mut Device<T>) -> Result<Vec<
     }
 
     Ok(endpoints)
+}
+
+fn configure_endpoint<T: UsbContext>(
+    handle: &mut DeviceHandle<T>,
+    endpoint: &Endpoint,
+) -> Result<()> {
+    handle.set_active_configuration(endpoint.config)?;
+    handle.claim_interface(endpoint.iface)?;
+    handle.set_alternate_setting(endpoint.iface, endpoint.setting)
+}
+
+fn set_report_0<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
+    let timeout = Duration::from_secs(1);
+
+    // values are picked directly from the captured packet
+    const REQUEST_TYPE: u8 = 0x21;
+    const REQUEST: u8 = 0x09;
+    const VALUE: u16 = 0x0208;
+    const INDEX: u16 = 0x0001;
+    const DATA: [u8; 17] = [
+        0x08, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x4a,
+    ];
+
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
+}
+
+fn switch_profile_0<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
+    let timeout = Duration::from_secs(1);
+
+    // values are picked directly from the captured packet
+    const REQUEST_TYPE: u8 = 0x21;
+    const REQUEST: u8 = 0x09;
+    const VALUE: u16 = 0x0208;
+    const INDEX: u16 = 0x0001;
+    const DATA: [u8; 17] = [
+        0x08, 0x07, 0x00, 0x00, 0x04, 0x02, 0x00, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xeb,
+    ];
+
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
+}
+
+fn switch_profile_1<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
+    let timeout = Duration::from_secs(1);
+
+    // values are picked directly from the captured packet
+    const REQUEST_TYPE: u8 = 0x21;
+    const REQUEST: u8 = 0x09;
+    const VALUE: u16 = 0x0208;
+    const INDEX: u16 = 0x0001;
+    const DATA: [u8; 17] = [
+        0x08, 0x07, 0x00, 0x00, 0x04, 0x02, 0x01, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xeb,
+    ];
+
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
 }
