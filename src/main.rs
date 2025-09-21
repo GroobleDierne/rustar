@@ -62,15 +62,7 @@ fn main() -> Result<()> {
         configure_endpoint(&mut handle, &endpoint)?;
         handle.claim_interface(1)?;
 
-        match profile {
-            0 => {
-                switch_profile_0(&mut handle)?;
-            }
-            1 => {
-                switch_profile_1(&mut handle)?;
-            }
-            _ => (),
-        };
+        switch_profile(&mut handle, profile.try_into().unwrap())?;
 
         // cleanup after use
         println!("Releasing interface...");
@@ -159,7 +151,7 @@ fn configure_endpoint<T: UsbContext>(
     handle.set_alternate_setting(endpoint.iface, endpoint.setting)
 }
 
-fn set_report_0<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
+fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
     // values are picked directly from the captured packet
@@ -167,31 +159,17 @@ fn set_report_0<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
     const REQUEST: u8 = 0x09;
     const VALUE: u16 = 0x0208;
     const INDEX: u16 = 0x0001;
-    const DATA: [u8; 17] = [
-        0x08, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x4a,
-    ];
-
-    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
-}
-
-fn switch_profile_0<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
-    let timeout = Duration::from_secs(1);
-
-    // values are picked directly from the captured packet
-    const REQUEST_TYPE: u8 = 0x21;
-    const REQUEST: u8 = 0x09;
-    const VALUE: u16 = 0x0208;
-    const INDEX: u16 = 0x0001;
-    const DATA: [u8; 17] = [
-        0x08, 0x07, 0x00, 0x00, 0x04, 0x02, 0x00, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    let data: [u8; 17] = [
+        0x08, 0x07, 0x00, 0x00, 0x04, 0x02, profile, 0x55 - profile, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0xeb,
     ];
 
-    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
 }
 
-fn switch_profile_1<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize> {
+
+// count must be in range [0;4]
+fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
     // values are picked directly from the captured packet
@@ -199,10 +177,10 @@ fn switch_profile_1<T: UsbContext>(handle: &mut DeviceHandle<T>) -> Result<usize
     const REQUEST: u8 = 0x09;
     const VALUE: u16 = 0x0208;
     const INDEX: u16 = 0x0001;
-    const DATA: [u8; 17] = [
-        0x08, 0x07, 0x00, 0x00, 0x04, 0x02, 0x01, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    let data: [u8; 17] = [
+        0x08, 0x07, 0x00, 0x00, 0x02, 0x02, count, 0x55 - count, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0xeb,
     ];
 
-    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &DATA, timeout)
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
 }
