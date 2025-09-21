@@ -151,6 +151,7 @@ fn configure_endpoint<T: UsbContext>(
     handle.set_alternate_setting(endpoint.iface, endpoint.setting)
 }
 
+// profile must be in range [0;3] TODO get how many profiles are active from the mouse
 fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
@@ -168,7 +169,7 @@ fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> R
 }
 
 
-// count must be in range [0;4]
+// count must be in range [1;4]
 fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
