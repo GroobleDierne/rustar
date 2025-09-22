@@ -37,13 +37,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mouse"
-version = "0.1.0"
-dependencies = [
- "rusb",
-]
-
-[[package]]
 name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -57,6 +50,13 @@ checksum = "ab9f9ff05b63a786553a4c02943b74b34a988448671001e9a27e2f0565cc05a4"
 dependencies = [
  "libc",
  "libusb1-sys",
+]
+
+[[package]]
+name = "rustar"
+version = "0.1.0"
+dependencies = [
+ "rusb",
 ]
 
 [[package]]

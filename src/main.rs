@@ -62,6 +62,7 @@ fn main() -> Result<()> {
         configure_endpoint(&mut handle, &endpoint)?;
         handle.claim_interface(1)?;
 
+        // set_profile_dpi(&mut handle, 1, 100)?;
         switch_profile(&mut handle, profile.try_into().unwrap())?;
 
         // cleanup after use
@@ -155,7 +156,6 @@ fn configure_endpoint<T: UsbContext>(
 fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
-    // values are picked directly from the captured packet
     const REQUEST_TYPE: u8 = 0x21;
     const REQUEST: u8 = 0x09;
     const VALUE: u16 = 0x0208;
@@ -173,7 +173,6 @@ fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> R
 fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) -> Result<usize> {
     let timeout = Duration::from_secs(1);
 
-    // values are picked directly from the captured packet
     const REQUEST_TYPE: u8 = 0x21;
     const REQUEST: u8 = 0x09;
     const VALUE: u16 = 0x0208;
@@ -183,5 +182,26 @@ fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) ->
         0x00, 0xeb,
     ];
 
+    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
+}
+
+// profile must be in range [0;3]
+fn set_profile_dpi<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8, dpi: u16) -> Result<usize> {
+    let timeout = Duration::from_secs(1);
+
+    const REQUEST_TYPE: u8 = 0x21;
+    const REQUEST: u8 = 0x09;
+    const VALUE: u16 = 0x0208;
+    const INDEX: u16 = 0x0001;
+
+    let dpi_index: u16 = (dpi / 50) - 1;
+    let lo: u8 = dpi_index as u8 ;
+    let hi: u8 = (dpi_index >> 8) as u8;
+    let checksum = 0x155 - (0x13 + (0x0c + profile as u16 * 4) + 0x55);
+
+    let data: [u8; 17] = [
+        0x08, 0x07, 0x00, 0x00, 0x0c + profile * 4, 0x04, lo, lo, hi * 0x44, ((0x55 - 2*lo as i16  - 0x44*hi as i16) & 0xFF) as u8, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, checksum as u8
+    ];
     handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
 }
