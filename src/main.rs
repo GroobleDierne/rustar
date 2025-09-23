@@ -1,78 +1,119 @@
-use std::{env, time::Duration};
+use std::time::Duration;
 
-use rusb::{Context, Device, DeviceHandle, Result, UsbContext};
+use clap::{Parser, Subcommand};
+use rusb::{Context, Device, DeviceHandle, Error, Result, UsbContext};
 
 const VID: u16 = 0x3554;
 const PID: u16 = 0xf509;
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    cmd: Commands
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Commands {
+    Activate {
+        #[arg()]
+        count: u8,
+    },
+    Select {
+        #[arg()]
+        profile: u8,
+    },
+    Set {
+        #[arg()]
+        profile: u8,
+        #[arg()]
+        value: u16,
+    }
+}
+
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let args = Args::parse();
+
     let mut context = Context::new()?;
-    let (mut device, mut handle) =
-        open_device(&mut context, VID, PID).expect("Failed to open USB device");
+    let (mut device, mut handle) = match open_device(&mut context, VID, PID) {
+        Ok(e) => e,
+        Err(Error::NotFound) => {
+            eprintln!("Device not found");
+            std::process::exit(1);
+        },
+        Err(_) => {
+            eprintln!("Failed to open USB device");
+            std::process::exit(1);
+        }
+    };
 
     println!(
-        "Bus {:03} Device {:03}",
+        "Mouse found on bus {:03} with device id {:03}",
         device.bus_number(),
         device.address()
     );
 
-    if args.len() == 1 {
-        panic!("Please specify a profile number");
-    }
-
-    let profile: i8 = match args
-        .get(1)
-        .expect("Please specify a profile number")
-        .as_ref()
-    {
-        "0" => 0,
-        "1" => 1,
-        _ => -1,
-    };
-
-    if profile == -1 {
-        panic!("Invalid profile");
-    }
-
     let endpoints = find_readable_endpoints(&mut device)?;
-    let mut conf_endpoint: Option<Endpoint> = None;
 
-    for endpoint in endpoints {
-        if conf_endpoint.is_none() {
-            conf_endpoint = Some(endpoint);
-        }
-
-        let has_kernel_driver = match handle.kernel_driver_active(endpoint.iface) {
+    for endpoint in &endpoints {
+        match handle.kernel_driver_active(endpoint.iface) {
             Ok(true) => {
                 handle.detach_kernel_driver(endpoint.iface)?;
-                true
             }
-            Ok(false) => false,
+            Ok(false) => (),
             Err(e) => {
-                println!("{:?}", e);
-                false
+                eprintln!("Failed to test if interface is claimed by kernel driver: {:}", e);
+                std::process::exit(1);
             }
         };
-        println!("has kernel driver? {}", has_kernel_driver);
     }
 
-    if let Some(endpoint) = conf_endpoint {
-        println!("Configuring...");
-        configure_endpoint(&mut handle, &endpoint)?;
-        handle.claim_interface(1)?;
+    let conf_endpoint = endpoints
+        .first()
+        .expect("No endpoints found on the device");
 
-        // set_profile_dpi(&mut handle, 1, 100)?;
-        switch_profile(&mut handle, profile.try_into().unwrap())?;
+    configure_endpoint(&mut handle, &conf_endpoint)?;
+    handle.claim_interface(1)?;
 
-        // cleanup after use
-        println!("Releasing interface...");
-        handle.release_interface(endpoint.iface)?;
-        handle.release_interface(1)?;
-        for edp in find_readable_endpoints(&mut device).unwrap() {
-            println!("Attaching kernel...");
-            handle.attach_kernel_driver(edp.iface)?;
+    match args.cmd {
+        Commands::Activate { count } => {
+            if count < 1 || count > 4 {
+                eprintln!("Count must be in range [1;4]");
+                std::process::exit(1);
+            }
+
+            set_profiles_count(&mut handle, count)?;
+        },
+        Commands::Select { profile } => {
+            if profile > 3 {
+                eprintln!("Profile must be in range [0;3]");
+                std::process::exit(1);
+            }
+
+            switch_profile(&mut handle, profile)?;
+        },
+        Commands::Set { profile, value } => {
+            if profile > 3 {
+                eprintln!("Profile must be in range [0;3]");
+                std::process::exit(1);
+            }
+            if value < 50 || value > 26000 {
+                eprintln!("DPI value must be in range [50;26000] it will be rounded down to a multiple of 50");
+                std::process::exit(1);
+            }
+
+            set_profile_dpi(&mut handle, profile, value)?;
         }
+    }
+
+    // cleanup after use
+    println!("Releasing interfaces...");
+    handle.release_interface(conf_endpoint.iface)?;
+    handle.release_interface(1)?;
+
+    for edp in find_readable_endpoints(&mut device).unwrap() {
+        println!("Attaching kernel driver...");
+        handle.attach_kernel_driver(edp.iface)?;
     }
 
     Ok(())
@@ -82,30 +123,33 @@ fn open_device<T: UsbContext>(
     context: &mut T,
     vid: u16,
     pid: u16,
-) -> Option<(Device<T>, DeviceHandle<T>)> {
+) -> Result<(Device<T>, DeviceHandle<T>)> {
     let devices = match context.devices() {
         Ok(d) => d,
-        Err(_) => return None,
+        Err(e) => return Err(e),
     };
 
     for device in devices.iter() {
         let device_desc = match device.device_descriptor() {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("Warning: Failed to get device descriptor: {}", e);
+                continue;                
+            },
         };
 
         if device_desc.vendor_id() == vid && device_desc.product_id() == pid {
             match device.open() {
-                Ok(handle) => return Some((device, handle)),
+                Ok(handle) => return Ok((device, handle)),
                 Err(e) => {
-                    println!("{}", e);
+                    eprintln!("Failed to open the device: {}", e);
                     continue;
                 }
             }
         }
     }
 
-    None
+    Err(Error::NotFound)
 }
 
 #[derive(Debug, Clone, Copy)]
