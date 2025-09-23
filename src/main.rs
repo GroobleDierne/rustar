@@ -82,7 +82,7 @@ fn main() -> Result<()> {
 
     match args.cmd {
         Commands::Activate { count } => {
-            if count < 1 || count > 4 {
+            if !(1..4).contains(&count) {
                 eprintln!("Count must be in range [1;4]");
                 std::process::exit(1);
             }
@@ -102,7 +102,7 @@ fn main() -> Result<()> {
                 eprintln!("Profile must be in range [0;3]");
                 std::process::exit(1);
             }
-            if value < 50 || value > 26000 {
+            if !(50..26000).contains(&value) {
                 eprintln!("DPI value must be in range [50;26000] it will be rounded down to a multiple of 50");
                 std::process::exit(1);
             }
@@ -131,10 +131,7 @@ fn open_device<T: UsbContext>(
     vid: u16,
     pid: u16,
 ) -> Result<(Device<T>, DeviceHandle<T>)> {
-    let devices = match context.devices() {
-        Ok(d) => d,
-        Err(e) => return Err(e),
-    };
+    let devices = context.devices()?;
 
     for device in devices.iter() {
         let device_desc = match device.device_descriptor() {
@@ -164,7 +161,6 @@ struct Endpoint {
     config: u8,
     iface: u8,
     setting: u8,
-    address: u8,
 }
 
 // returns all readable endpoints for given usb device and descriptor
@@ -179,14 +175,11 @@ fn find_readable_endpoints<T: UsbContext>(device: &mut Device<T>) -> Result<Vec<
 
         for interface in config_desc.interfaces() {
             for interface_desc in interface.descriptors() {
-                for endpoint_desc in interface_desc.endpoint_descriptors() {
-                    endpoints.push(Endpoint {
-                        config: config_desc.number(),
-                        iface: interface_desc.interface_number(),
-                        setting: interface_desc.setting_number(),
-                        address: endpoint_desc.address(),
-                    });
-                }
+                endpoints.push(Endpoint {
+                    config: config_desc.number(),
+                    iface: interface_desc.interface_number(),
+                    setting: interface_desc.setting_number(),
+                });
             }
         }
     }
@@ -230,7 +223,7 @@ fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) ->
     const INDEX: u16 = 0x0001;
     let data: [u8; 17] = [
         0x08, 0x07, 0x00, 0x00, 0x02, 0x02, count, 0x55 - count, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0xeb,
+        0x00, 0xed,
     ];
 
     handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
