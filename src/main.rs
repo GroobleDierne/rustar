@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let mut context = Context::new()?;
-    let (mut device, mut handle) = match open_device(&mut context, VID, PID) {
+    let (device, mut handle) = match open_device(&mut context, VID, PID) {
         Ok(e) => e,
         Err(Error::NotFound) => {
             eprintln!("Device not found");
@@ -53,31 +53,12 @@ fn main() -> Result<()> {
         device.address()
     );
 
-    let endpoints = find_readable_endpoints(&mut device)?;
-
+    println!("Claiming interfaces...");
     // Detach from interfaces
-    // NOTE: a limitation in libusb forces us to detach from all interfaces
-    // even if we only need one
-    // Maybe we don't need to detach from all interfaces if we don't reconfigure the device?
-    for endpoint in &endpoints {
-        match handle.kernel_driver_active(endpoint.iface) {
-            Ok(true) => {
-                handle.detach_kernel_driver(endpoint.iface)?;
-            }
-            Ok(false) => (),
-            Err(e) => {
-                eprintln!("Failed to test if interface is claimed by kernel driver: {:}", e);
-                std::process::exit(1);
-            }
-        };
-    }
-
-    let conf_endpoint = endpoints
-        .first()
-        .expect("No endpoints found on the device");
-
-    // This is probably not necessary, I don't know if I wanna keep it
-    configure_endpoint(&mut handle, &conf_endpoint)?;
+    handle.detach_kernel_driver(0)?;
+    handle.detach_kernel_driver(1)?;
+    // Claim interfaces
+    handle.claim_interface(0)?;
     handle.claim_interface(1)?;
 
     match args.cmd {
@@ -114,14 +95,11 @@ fn main() -> Result<()> {
     // cleanup after use
     println!("Releasing interfaces...");
     // Only release the interfaces we claimed
-    handle.release_interface(conf_endpoint.iface)?;
+    handle.release_interface(0)?;
     handle.release_interface(1)?;
-
-    // Reattach every interface
-    for edp in find_readable_endpoints(&mut device).unwrap() {
-        println!("Attaching kernel driver...");
-        handle.attach_kernel_driver(edp.iface)?;
-    }
+    // Reattach borrowed interfaces
+    handle.attach_kernel_driver(0)?;
+    handle.attach_kernel_driver(1)?;
 
     Ok(())
 }
@@ -154,46 +132,6 @@ fn open_device<T: UsbContext>(
     }
 
     Err(Error::NotFound)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Endpoint {
-    config: u8,
-    iface: u8,
-    setting: u8,
-}
-
-// returns all readable endpoints for given usb device and descriptor
-fn find_readable_endpoints<T: UsbContext>(device: &mut Device<T>) -> Result<Vec<Endpoint>> {
-    let device_desc = device.device_descriptor()?;
-    let mut endpoints = vec![];
-    for n in 0..device_desc.num_configurations() {
-        let config_desc = match device.config_descriptor(n) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        for interface in config_desc.interfaces() {
-            for interface_desc in interface.descriptors() {
-                endpoints.push(Endpoint {
-                    config: config_desc.number(),
-                    iface: interface_desc.interface_number(),
-                    setting: interface_desc.setting_number(),
-                });
-            }
-        }
-    }
-
-    Ok(endpoints)
-}
-
-fn configure_endpoint<T: UsbContext>(
-    handle: &mut DeviceHandle<T>,
-    endpoint: &Endpoint,
-) -> Result<()> {
-    handle.set_active_configuration(endpoint.config)?;
-    handle.claim_interface(endpoint.iface)?;
-    handle.set_alternate_setting(endpoint.iface, endpoint.setting)
 }
 
 // profile must be in range [0;3] TODO get how many profiles are active from the mouse
