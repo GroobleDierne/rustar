@@ -55,6 +55,10 @@ fn main() -> Result<()> {
 
     let endpoints = find_readable_endpoints(&mut device)?;
 
+    // Detach from interfaces
+    // NOTE: a limitation in libusb forces us to detach from all interfaces
+    // even if we only need one
+    // Maybe we don't need to detach from all interfaces if we don't reconfigure the device?
     for endpoint in &endpoints {
         match handle.kernel_driver_active(endpoint.iface) {
             Ok(true) => {
@@ -72,6 +76,7 @@ fn main() -> Result<()> {
         .first()
         .expect("No endpoints found on the device");
 
+    // This is probably not necessary, I don't know if I wanna keep it
     configure_endpoint(&mut handle, &conf_endpoint)?;
     handle.claim_interface(1)?;
 
@@ -108,9 +113,11 @@ fn main() -> Result<()> {
 
     // cleanup after use
     println!("Releasing interfaces...");
+    // Only release the interfaces we claimed
     handle.release_interface(conf_endpoint.iface)?;
     handle.release_interface(1)?;
 
+    // Reattach every interface
     for edp in find_readable_endpoints(&mut device).unwrap() {
         println!("Attaching kernel driver...");
         handle.attach_kernel_driver(edp.iface)?;
