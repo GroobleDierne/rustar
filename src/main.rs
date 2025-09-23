@@ -136,46 +136,27 @@ fn open_device<T: UsbContext>(
 
 // profile must be in range [0;3] TODO get how many profiles are active from the mouse
 fn switch_profile<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8) -> Result<usize> {
-    let timeout = Duration::from_secs(1);
-
-    const REQUEST_TYPE: u8 = 0x21;
-    const REQUEST: u8 = 0x09;
-    const VALUE: u16 = 0x0208;
-    const INDEX: u16 = 0x0001;
     let data: [u8; 17] = [
         0x08, 0x07, 0x00, 0x00, 0x04, 0x02, profile, 0x55 - profile, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0xeb,
     ];
 
-    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
+    write_set_report(handle, data)
 }
 
 
 // count must be in range [1;4]
 fn set_profiles_count<T: UsbContext>(handle: &mut DeviceHandle<T>, count: u8) -> Result<usize> {
-    let timeout = Duration::from_secs(1);
-
-    const REQUEST_TYPE: u8 = 0x21;
-    const REQUEST: u8 = 0x09;
-    const VALUE: u16 = 0x0208;
-    const INDEX: u16 = 0x0001;
     let data: [u8; 17] = [
         0x08, 0x07, 0x00, 0x00, 0x02, 0x02, count, 0x55 - count, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0xed,
     ];
 
-    handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
+    write_set_report(handle, data)
 }
 
 // profile must be in range [0;3]
 fn set_profile_dpi<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8, dpi: u16) -> Result<usize> {
-    let timeout = Duration::from_secs(1);
-
-    const REQUEST_TYPE: u8 = 0x21;
-    const REQUEST: u8 = 0x09;
-    const VALUE: u16 = 0x0208;
-    const INDEX: u16 = 0x0001;
-
     let dpi_index: u16 = (dpi / 50) - 1;
     let lo: u8 = dpi_index as u8 ;
     let hi: u8 = (dpi_index >> 8) as u8;
@@ -185,5 +166,26 @@ fn set_profile_dpi<T: UsbContext>(handle: &mut DeviceHandle<T>, profile: u8, dpi
         0x08, 0x07, 0x00, 0x00, 0x0c + profile * 4, 0x04, lo, lo, hi * 0x44, ((0x55 - 2*lo as i16  - 0x44*hi as i16) & 0xFF) as u8, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, checksum as u8
     ];
+
+    write_set_report(handle, data)
+}
+
+fn write_set_report<T: UsbContext>(handle: &mut DeviceHandle<T>, data: [u8; 17]) -> Result<usize> {
+    let timeout = Duration::from_secs(1);
+
+    const REQUEST_TYPE: u8 = 0x21;
+    const REQUEST: u8 = 0x09;
+    const VALUE: u16 = 0x0208;
+    const INDEX: u16 = 0x0001;
+
     handle.write_control(REQUEST_TYPE, REQUEST, VALUE, INDEX, &data, timeout)
+}
+
+fn read_interrupt<T: UsbContext>(handle: &mut DeviceHandle<T>, address: u8) -> Result<Vec<u8>> {
+    let timeout = Duration::from_secs(1);
+    let mut buf = [0u8; 64];
+
+    handle
+        .read_interrupt(address, &mut buf, timeout)
+        .map(|_| buf.to_vec())
 }
